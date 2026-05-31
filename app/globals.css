@@ -1,1 +1,171 @@
 @import "tailwindcss";
+
+/* === 반응형 컬러 슬라이더 ===
+   네이티브 <input type="range">의 트랙/핸들은 인라인 스타일로는 닿지 않는
+   pseudo-element(::-webkit-slider-thumb 등)로만 칠할 수 있다. 그래서 색상은
+   CSS 변수(--track-gradient, --thumb-color)로 받아 컴포넌트가 인라인으로
+   실시간 주입하고, 모양만 여기서 정의한다. */
+.hue-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 0.75rem;
+  border-radius: 9999px;
+  background: var(--track-gradient);
+  cursor: pointer;
+  outline: none;
+}
+
+.hue-range:focus-visible {
+  box-shadow: 0 0 0 4px rgba(17, 24, 39, 0.2);
+}
+
+.hue-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 9999px;
+  background: var(--thumb-color);
+  border: 3px solid #ffffff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.3);
+  transition: background-color 120ms ease;
+}
+
+.hue-range::-moz-range-track {
+  height: 0.75rem;
+  border-radius: 9999px;
+  background: var(--track-gradient);
+}
+
+.hue-range::-moz-range-thumb {
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 9999px;
+  background: var(--thumb-color);
+  border: 3px solid #ffffff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.3);
+  transition: background-color 120ms ease;
+}
+
+/* === STEP 1 몰입형 브리프 화면 모션 ===
+   framer-motion 의존 없이 동일한 결을 내기 위한 경량 CSS 키프레임.
+   섹션 진입 페이드업, CTA 시머, 배경 메쉬 블롭의 느린 부유를 담당한다.
+   prefers-reduced-motion 사용자는 모든 모션을 정지시킨다. */
+@keyframes hueist-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.hueist-fade-up {
+  opacity: 0;
+  animation: hueist-fade-up 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* 스텝 전환: 살짝 떠오르며 블러가 풀리는 감각적 진입. 스텝마다 remount 되어
+   재생되고, 내부 요소는 animation-delay 로 스태거를 준다. */
+@keyframes hueist-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+.hueist-rise {
+  opacity: 0;
+  animation: hueist-rise 0.65s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* CTA 표면을 가로지르는 빛줄기 */
+@keyframes hueist-shimmer {
+  0% {
+    transform: translateX(-160%) skewX(-14deg);
+  }
+  55%,
+  100% {
+    transform: translateX(420%) skewX(-14deg);
+  }
+}
+.hueist-shimmer {
+  animation: hueist-shimmer 3.4s ease-in-out infinite;
+}
+
+/* 배경 메쉬 그라데이션 블롭의 느린 부유 */
+@keyframes hueist-float-a {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(44px, -34px) scale(1.1);
+  }
+}
+@keyframes hueist-float-b {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-40px, 30px) scale(1.14);
+  }
+}
+@keyframes hueist-float-c {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(28px, 40px) scale(0.94);
+  }
+}
+.hueist-blob-a {
+  animation: hueist-float-a 19s ease-in-out infinite;
+}
+.hueist-blob-b {
+  animation: hueist-float-b 23s ease-in-out infinite;
+}
+.hueist-blob-c {
+  animation: hueist-float-c 21s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hueist-fade-up,
+  .hueist-rise {
+    animation: none;
+    opacity: 1;
+    filter: none;
+  }
+  .hueist-shimmer,
+  .hueist-blob-a,
+  .hueist-blob-b,
+  .hueist-blob-c {
+    animation: none;
+  }
+}
+
+/* === 앱 뷰포트 스크롤바 숨김 ===
+   생성된 화면이 스크롤바를 노출하면 "웹사이트"처럼 보인다. react-live 는 인라인
+   스타일만 허용해 생성 코드가 ::-webkit-scrollbar 를 칠할 수 없으므로, 앱 뷰포트
+   컨테이너와 그 안의 모든 스크롤 영역의 스크롤바를 여기서 숨긴다.
+   ※ 스크롤 동작 자체는 그대로 유지된다(overflow 만 숨김이 아니라 bar 만 비표시). */
+.hueist-app-viewport,
+.hueist-app-viewport * {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* 구형 Edge/IE */
+}
+.hueist-app-viewport::-webkit-scrollbar,
+.hueist-app-viewport *::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none; /* Chrome / Safari / WebKit */
+}

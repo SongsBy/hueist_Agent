@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 const PRECONNECT_TARGETS = [
   { href: "https://fonts.googleapis.com", crossOrigin: false },
@@ -81,4 +81,79 @@ export function useDynamicGoogleFont(input) {
       for (const href of hrefs) release(href);
     };
   }, [key]);
+}
+
+// families: collectFontFamiliesForTones()가 반환하는 [{ family, weights }] 또는
+// 단순 문자열 family 배열. "Family:weight" 형태의 안정적인 load 스펙으로 정규화한다.
+function normalizeFontFaceSpecs(families) {
+  if (!Array.isArray(families)) return [];
+  const specs = new Set();
+  for (const item of families) {
+    const family = typeof item === "string" ? item : item?.family;
+    if (!family) continue;
+    const weights =
+      item && Array.isArray(item.weights) && item.weights.length > 0
+        ? item.weights
+        : [400];
+    for (const w of weights) {
+      const num = Number(w);
+      if (Number.isFinite(num)) specs.add(`${family}:${num}`);
+    }
+  }
+  // 정렬해 배열 순서가 달라도 동일 effect 키가 되도록 한다.
+  return Array.from(specs).sort();
+}
+
+// FOUT(폰트 교체 깜빡임) 완화용 훅.
+// CSS Font Loading API로 요청한 폰트들이 실제로 준비됐는지 추적해 boolean을 반환한다.
+// 호출부는 ready가 true가 될 때까지 콘텐츠를 살짝 가리거나 페이드인해 폴백→웹폰트
+// 전환의 깜빡임을 숨길 수 있다. 네트워크 실패/지연 시 무한 대기를 막기 위해
+// timeoutMs 후에는 강제로 ready 처리(폴백 폰트로 우아하게 노출)한다.
+export function useFontsReady(families, { timeoutMs = 2000 } = {}) {
+  const key = normalizeFontFaceSpecs(families).join("\n");
+
+  // 로드할 폰트가 없으면 즉시 준비 완료. 키가 바뀌면 다시 대기 상태로.
+  const [ready, setReady] = useState(() => key === "");
+
+  useEffect(() => {
+    if (key === "") {
+      setReady(true);
+      return;
+    }
+    // 폰트 로딩 API 미지원 환경(SSR/구형 브라우저)에서는 차단하지 않는다.
+    if (typeof document === "undefined" || !document.fonts?.load) {
+      setReady(true);
+      return;
+    }
+
+    let cancelled = false;
+    setReady(false);
+
+    const loads = key.split("\n").map((spec) => {
+      const sep = spec.lastIndexOf(":");
+      const family = spec.slice(0, sep);
+      const weight = spec.slice(sep + 1);
+      // 개별 폰트 실패가 전체 Promise.all을 깨지 않도록 catch로 흡수.
+      return document.fonts.load(`${weight} 1em "${family}"`).catch(() => {});
+    });
+
+    const timer = setTimeout(() => {
+      if (!cancelled) setReady(true);
+    }, timeoutMs);
+
+    Promise.all(loads)
+      .then(() => document.fonts.ready)
+      .then(() => {
+        if (cancelled) return;
+        clearTimeout(timer);
+        setReady(true);
+      });
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [key, timeoutMs]);
+
+  return ready;
 }

@@ -42,8 +42,7 @@ export const CURATED_KOREAN_FONTS = [
     family: "Nanum Gothic",
     category: "sans-serif",
     tags: ["classic", "neutral", "stable"],
-    personality:
-      "한국에서 가장 익숙한 본문 산세리프. 무난함과 신뢰감이 강점.",
+    personality: "한국에서 가장 익숙한 본문 산세리프. 무난함과 신뢰감이 강점.",
     weights: [400, 700, 800],
     recommended_weights: { heading: 700, body: 400, emphasis: 700 },
     best_for: ["공공", "교육", "뉴스", "일반"],
@@ -70,8 +69,7 @@ export const CURATED_KOREAN_FONTS = [
     family: "Noto Serif KR",
     category: "serif",
     tags: ["editorial", "classic", "trustworthy", "refined"],
-    personality:
-      "에디토리얼 세리프의 표준. 권위와 신뢰의 무게감을 전달.",
+    personality: "에디토리얼 세리프의 표준. 권위와 신뢰의 무게감을 전달.",
     weights: [200, 300, 400, 500, 600, 700, 900],
     recommended_weights: { heading: 700, body: 400, emphasis: 600 },
     best_for: ["에디토리얼", "출판", "법률", "금융", "럭셔리"],
@@ -126,8 +124,7 @@ export const CURATED_KOREAN_FONTS = [
     family: "Black Han Sans",
     category: "sans-serif",
     tags: ["bold", "display", "impact", "headline"],
-    personality:
-      "임팩트 강한 디스플레이 산세리프. 헤드라인 강조에 압도적.",
+    personality: "임팩트 강한 디스플레이 산세리프. 헤드라인 강조에 압도적.",
     weights: [400],
     recommended_weights: { heading: 400, body: 400, emphasis: 400 },
     best_for: ["엔터테인먼트", "스포츠", "캠페인", "리테일"],
@@ -136,8 +133,7 @@ export const CURATED_KOREAN_FONTS = [
     family: "Do Hyeon",
     category: "sans-serif",
     tags: ["strong", "friendly", "display", "casual"],
-    personality:
-      "강한 무게감에 친근한 라운드. 캐주얼 디스플레이로 안정적.",
+    personality: "강한 무게감에 친근한 라운드. 캐주얼 디스플레이로 안정적.",
     weights: [400],
     recommended_weights: { heading: 400, body: 400, emphasis: 400 },
     best_for: ["F&B", "리테일", "엔터테인먼트", "이커머스"],
@@ -209,7 +205,9 @@ function familyKey(family) {
 export function findCuratedFont(family) {
   const key = familyKey(family);
   if (!key) return null;
-  return CURATED_KOREAN_FONTS.find((f) => f.family.toLowerCase() === key) ?? null;
+  return (
+    CURATED_KOREAN_FONTS.find((f) => f.family.toLowerCase() === key) ?? null
+  );
 }
 
 export function filterFontsByCategory(fonts, category) {
@@ -245,10 +243,12 @@ export function buildGoogleFontUrl(families) {
   return `https://fonts.googleapis.com/css2?${params.join("&")}&display=swap`;
 }
 
-// 톤 배열에서 사용 중인 (family → weights) 조합을 모아 하나의 Google Fonts URL로 묶는다.
-// 추천 화면처럼 여러 톤을 동시에 렌더링할 때 단일 <link>로 일괄 로드하기 위함.
-export function buildGoogleFontUrlForTones(tones) {
-  if (!Array.isArray(tones)) return null;
+// 톤 배열에서 실제로 로드해야 할 (family → weights) 조합을 모은다.
+// font_weight_map은 Phase 2(enrich) 산출물이라 Phase 1 톤에는 없다.
+// 따라서 가중치가 비면 큐레이션의 recommended_weights로 폴백해야
+// Phase 1(추천 화면)에서도 폰트가 정상적으로 로드된다.
+export function collectFontFamiliesForTones(tones) {
+  if (!Array.isArray(tones)) return [];
 
   const familyWeights = new Map();
 
@@ -268,21 +268,28 @@ export function buildGoogleFontUrlForTones(tones) {
     const body = findCuratedFont(t.body_font);
     const wm = t.font_weight_map ?? {};
     if (heading) {
-      addWeight(heading.family, wm.heading);
-      addWeight(heading.family, wm.emphasis);
+      const rec = heading.recommended_weights ?? {};
+      addWeight(heading.family, wm.heading ?? rec.heading ?? 700);
+      addWeight(heading.family, wm.emphasis ?? rec.emphasis);
     }
     if (body) {
-      addWeight(body.family, wm.body);
-      addWeight(body.family, wm.emphasis);
+      const rec = body.recommended_weights ?? {};
+      addWeight(body.family, wm.body ?? rec.body ?? 400);
+      addWeight(body.family, wm.emphasis ?? rec.emphasis);
     }
   }
 
-  if (familyWeights.size === 0) return null;
+  return Array.from(familyWeights.entries()).map(([family, weights]) => ({
+    family,
+    weights: Array.from(weights),
+  }));
+}
 
-  const families = Array.from(familyWeights.entries()).map(
-    ([family, weights]) => ({ family, weights: Array.from(weights) }),
-  );
-
+// 여러 톤을 동시에 렌더링할 때(추천 화면) 중복 폰트를 제거하고
+// 단일 <link>로 일괄 로드하기 위한 병합 URL을 만든다.
+export function buildGoogleFontUrlForTones(tones) {
+  const families = collectFontFamiliesForTones(tones);
+  if (families.length === 0) return null;
   return buildGoogleFontUrl(families);
 }
 
@@ -294,6 +301,87 @@ export function buildCurationForPrompt(fonts = CURATED_KOREAN_FONTS) {
         `- ${f.family} (${f.category}) | 태그: ${f.tags.join("/")} | 굵기: ${f.weights.join(",")} | 적합 도메인: ${f.best_for.join(", ")} | 성격: ${f.personality}`,
     )
     .join("\n");
+}
+
+const DEFAULT_HEADING_FALLBACK = "Noto Sans KR";
+const DEFAULT_BODY_FALLBACK = "Noto Sans KR";
+
+function pickWeightFromFont(font, kind) {
+  if (!font) return null;
+  return font.recommended_weights?.[kind] ?? null;
+}
+
+function clampWeight(weight, font) {
+  if (!font || !Array.isArray(font.weights) || font.weights.length === 0) {
+    return weight;
+  }
+  const num = Number(weight);
+  if (!Number.isFinite(num)) return font.recommended_weights?.body ?? 400;
+  if (font.weights.includes(num)) return num;
+  return font.weights.reduce((best, w) =>
+    Math.abs(w - num) < Math.abs(best - num) ? w : best,
+  );
+}
+
+// Phase 2 (Deep Dive) 전용: Gemini가 내려준 typography 이름을 큐레이션과 매칭하고
+// Google Fonts URL / fallback stack까지 구성한다.
+export function enrichTypography(rawTypography) {
+  const heading =
+    findCuratedFont(rawTypography?.heading_font) ??
+    findCuratedFont(DEFAULT_HEADING_FALLBACK);
+  const body =
+    findCuratedFont(rawTypography?.body_font) ??
+    findCuratedFont(DEFAULT_BODY_FALLBACK);
+
+  const weightMap = rawTypography?.font_weight_map ?? {};
+  const headingWeight = clampWeight(
+    weightMap.heading ?? pickWeightFromFont(heading, "heading") ?? 700,
+    heading,
+  );
+  const bodyWeight = clampWeight(
+    weightMap.body ?? pickWeightFromFont(body, "body") ?? 400,
+    body,
+  );
+  const emphasisWeight = clampWeight(
+    weightMap.emphasis ?? pickWeightFromFont(body, "emphasis") ?? 500,
+    body,
+  );
+
+  const sameFamily = heading.family === body.family;
+  const families = sameFamily
+    ? [
+        {
+          family: heading.family,
+          weights: [headingWeight, bodyWeight, emphasisWeight],
+        },
+      ]
+    : [
+        { family: heading.family, weights: [headingWeight, emphasisWeight] },
+        { family: body.family, weights: [bodyWeight, emphasisWeight] },
+      ];
+
+  const google_font_url = buildGoogleFontUrl(families);
+
+  return {
+    heading_font: heading.family,
+    body_font: body.family,
+    font_rationale:
+      typeof rawTypography?.font_rationale === "string" &&
+      rawTypography.font_rationale.trim().length > 0
+        ? rawTypography.font_rationale
+        : `${heading.family}은(는) ${heading.personality} ${
+            sameFamily
+              ? "동일 패밀리의 다른 굵기로 위계를 만들어 일관된 톤을 유지한다."
+              : `${body.family}을(를) 본문에 매칭하여 ${body.personality}`
+          }`,
+    font_weight_map: {
+      heading: headingWeight,
+      body: bodyWeight,
+      emphasis: emphasisWeight,
+    },
+    google_font_url,
+    fallback_stack: FALLBACK_FONT_STACK,
+  };
 }
 
 // Live API로 큐레이션을 검증/보강. 키 없음/실패 시 큐레이션 그대로 fallback.
