@@ -3,7 +3,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { LiveProvider, LivePreview, LiveError } from "react-live";
-import { Sparkles, Send, Paperclip, X, RefreshCw, Bot, AlertTriangle } from "lucide-react";
+import { X, RefreshCw, AlertTriangle } from "lucide-react";
 import { useToneStore } from "../store/useToneStore";
 
 // react-live 가 생성 코드 안에서 쓸 수 있는 유일한 의존성. (결과 페이지와 동일 정책)
@@ -16,6 +16,9 @@ const SCOPE = { React, useState };
 function stripModuleSyntax(code) {
   if (typeof code !== "string") return "";
   return code
+    // 일부 모델이 흘리는 단독 ``` 마커 줄(언어태그 포함) 제거. 비대칭 펜스가
+    // 남아오면 여기서 한 번 더 걷어내 react-live 파싱 에러를 막는다(이중 방어).
+    .replace(/^\s*```[a-zA-Z]*\s*$/gm, "")
     // import X from '...'; / import { a, b } from '...'; / import '...';
     .replace(
       /import\s+(?:[\w*{}\n\r\t, ]+\s+from\s+)?['"][^'"]+['"];?/g,
@@ -117,22 +120,12 @@ export default function SketchbookModal({ tone, onClose }) {
     };
   }, [onClose]);
 
-  // 챗 입력은 전송 시 비워주되, 현재 API 는 추가 프롬프트를 받지 않으므로
-  // 전송 = "이 톤으로 다시 생성"으로 연결한다. (프롬프트 반영은 후속 작업)
-  const [draft, setDraft] = useState("");
-  const handleSend = () => {
-    setDraft("");
-    runGenerate();
-  };
-
   const colors = tone?.colors ?? {};
   const {
     primary = "#4F46E5",
     tertiary = "#A78BFA",
     background = "#FFFFFF",
   } = colors;
-
-  const paletteSwatches = ["primary", "secondary", "tertiary", "surface", "background"];
 
   return (
     <div
@@ -150,153 +143,6 @@ export default function SketchbookModal({ tone, onClose }) {
         className="pointer-events-none absolute -right-40 -bottom-40 h-[32rem] w-[32rem] rounded-full opacity-20 blur-[140px]"
         style={{ backgroundColor: tertiary }}
       />
-
-      {/* ════════════════ 좌측: Chat Panel ════════════════ */}
-      <aside className="relative z-10 flex w-[380px] shrink-0 flex-col border-r border-white/10 bg-white/[0.04] backdrop-blur-2xl">
-        {/* Header */}
-        <header className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
-          <div
-            className="flex h-11 w-11 items-center justify-center rounded-2xl shadow-lg"
-            style={{ backgroundImage: `linear-gradient(135deg, ${primary}, ${tertiary})` }}
-          >
-            <Sparkles size={20} className="text-white" strokeWidth={2.4} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-[15px] font-bold tracking-tight text-white">
-              디자인 에이전트
-            </h2>
-            <p className="flex items-center gap-1.5 text-xs text-white/50">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
-              </span>
-              {tone?.name ?? "AI Design Agent"} · 온라인
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="스케치북 닫기"
-            className="flex h-9 w-9 items-center justify-center rounded-full text-white/50 transition-colors hover:bg-white/10 hover:text-white"
-          >
-            <X size={18} />
-          </button>
-        </header>
-
-        {/* Messages */}
-        <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-5 py-6">
-          {/* 시스템: 적용된 팔레트 */}
-          <div className="flex flex-col items-center gap-2">
-            <span className="rounded-full bg-white/[0.06] px-3 py-1 text-[11px] font-medium tracking-wide text-white/40">
-              적용된 컬러 팔레트
-            </span>
-            <div className="flex -space-x-1.5">
-              {paletteSwatches.map((key) =>
-                colors[key] ? (
-                  <span
-                    key={key}
-                    title={`${key}: ${colors[key]}`}
-                    className="h-6 w-6 rounded-full border-2 border-slate-900 shadow"
-                    style={{ backgroundColor: colors[key] }}
-                  />
-                ) : null,
-              )}
-            </div>
-          </div>
-
-          {/* AI 인사말 말풍선 */}
-          <div className="flex items-end gap-2.5">
-            <div
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl shadow"
-              style={{ backgroundImage: `linear-gradient(135deg, ${primary}, ${tertiary})` }}
-            >
-              <Bot size={16} className="text-white" />
-            </div>
-            <div className="max-w-[80%] rounded-2xl rounded-bl-md border border-white/10 bg-white/[0.07] px-4 py-3 text-[13px] leading-relaxed text-white/85">
-              안녕하세요! 선택하신{" "}
-              <span className="font-semibold text-white">
-                {tone?.name ?? "이 색상"}
-              </span>{" "}
-              팔레트로 첫 화면을 그리고 있어요. ✨
-            </div>
-          </div>
-
-          {/* 실시간 생성 상태 말풍선 (실제 store 상태 반영) */}
-          <div className="flex items-end gap-2.5">
-            <div
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl shadow"
-              style={{ backgroundImage: `linear-gradient(135deg, ${primary}, ${tertiary})` }}
-            >
-              <Bot size={16} className="text-white" />
-            </div>
-            <div className="max-w-[80%] rounded-2xl rounded-bl-md border border-white/10 bg-white/[0.07] px-4 py-3 text-[13px] leading-relaxed text-white/85">
-              {isGeneratingUi ? (
-                <span className="flex items-center gap-2">
-                  <span className="flex gap-1">
-                    {[0, 1, 2].map((i) => (
-                      <span
-                        key={i}
-                        className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/70"
-                        style={{ animationDelay: `${i * 0.15}s` }}
-                      />
-                    ))}
-                  </span>
-                  화면을 그리는 중이에요…
-                </span>
-              ) : generateUiError ? (
-                <span className="text-rose-300">
-                  생성에 실패했어요. 아래 전송 버튼이나 새로고침으로 다시 시도해 주세요.
-                </span>
-              ) : generatedUiCode ? (
-                <>오른쪽에 화면을 완성했어요. 수정하고 싶은 부분을 말씀해 주세요. 🎨</>
-              ) : (
-                <>준비됐어요. 전송을 누르면 이 톤으로 화면을 생성합니다.</>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Input */}
-        <div className="border-t border-white/10 p-4">
-          <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-white/[0.06] p-2 pl-3 transition-colors focus-within:border-white/25">
-            <button
-              type="button"
-              aria-label="파일 첨부"
-              className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-white/40 transition-colors hover:bg-white/10 hover:text-white/70"
-            >
-              <Paperclip size={17} />
-            </button>
-            <textarea
-              rows={1}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder="원하는 디자인을 설명해 주세요…"
-              className="max-h-28 flex-1 resize-none bg-transparent py-1.5 text-[13px] text-white placeholder:text-white/35 focus:outline-none"
-            />
-            <button
-              type="button"
-              onClick={handleSend}
-              disabled={isGeneratingUi}
-              aria-label="전송"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-              style={{
-                backgroundImage: `linear-gradient(135deg, ${primary}, ${tertiary})`,
-              }}
-            >
-              <Send size={16} strokeWidth={2.4} />
-            </button>
-          </div>
-          <p className="mt-2 px-1 text-center text-[11px] text-white/30">
-            Enter 로 전송 · Shift + Enter 줄바꿈
-          </p>
-        </div>
-      </aside>
 
       {/* ════════════════ 우측: Main Canvas ════════════════ */}
       <main className="relative z-0 flex flex-1 flex-col">
@@ -320,15 +166,25 @@ export default function SketchbookModal({ tone, onClose }) {
             <span className="h-1.5 w-1.5 rounded-full bg-white/40" />
             Live Preview · Mobile · 390 × 844
           </div>
-          <button
-            type="button"
-            onClick={runGenerate}
-            disabled={isGeneratingUi}
-            className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-3.5 py-1.5 text-xs font-medium text-white/70 backdrop-blur transition-colors hover:bg-white/10 disabled:opacity-50"
-          >
-            <RefreshCw size={13} className={isGeneratingUi ? "animate-spin" : ""} />
-            다시 생성
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={runGenerate}
+              disabled={isGeneratingUi}
+              className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-3.5 py-1.5 text-xs font-medium text-white/70 backdrop-blur transition-colors hover:bg-white/10 disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={isGeneratingUi ? "animate-spin" : ""} />
+              다시 생성
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="스케치북 닫기"
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/[0.05] text-white/70 backdrop-blur transition-colors hover:bg-rose-500/20 hover:text-white"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         {/* 표준 모바일 앱 뷰포트 (390 × 844). 장식용 폰 목업을 걷어내고

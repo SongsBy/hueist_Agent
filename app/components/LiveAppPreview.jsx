@@ -14,6 +14,8 @@ const SCOPE = { React, useState };
 function stripModuleSyntax(code) {
   if (typeof code !== "string") return "";
   return code
+    // 일부 모델이 흘리는 단독 ``` 마커 줄(언어태그 포함) 제거(비대칭 펜스 방어).
+    .replace(/^\s*```[a-zA-Z]*\s*$/gm, "")
     .replace(/import\s+(?:[\w*{}\n\r\t, ]+\s+from\s+)?['"][^'"]+['"];?/g, "")
     .replace(/export\s+default\s+/g, "")
     .replace(/^\s*export\s+/gm, "");

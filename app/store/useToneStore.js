@@ -15,6 +15,9 @@ export const useToneStore = create(
       appDescription: "",
       recommendedTones: [],
       selectedTone: null,
+      // 홈 템플릿 갤러리에서 고른 베이스 레이아웃 id (registry.js 의 TEMPLATES[].id).
+      // UI 생성 시 베이스 레이아웃 힌트로 사용한다. 미선택 시 null.
+      selectedTemplateId: null,
       intensity: INITIAL_INTENSITY,
       isEnriching: false,
       enrichError: null,
@@ -31,6 +34,11 @@ export const useToneStore = create(
       setAppDescription: (appDescription) => set({ appDescription }),
       setRecommendedTones: (recommendedTones) => set({ recommendedTones }),
       setSelectedTone: (selectedTone) => set({ selectedTone }),
+      // 같은 템플릿을 다시 누르면 선택 해제(토글).
+      setSelectedTemplateId: (id) =>
+        set((state) => ({
+          selectedTemplateId: state.selectedTemplateId === id ? null : id,
+        })),
       setIntensity: (intensity) => set({ intensity }),
 
       resetTones: () =>
@@ -96,7 +104,7 @@ export const useToneStore = create(
       // react-live 로 렌더할 단일 화면 JSX 코드를 받아온다.
       // enrich 와 분리돼 있어 같은 톤에서 "다시 생성"으로 반복 호출할 수 있다.
       generateUi: async () => {
-        const { selectedTone, survey } = get();
+        const { selectedTone, survey, selectedTemplateId } = get();
         if (!selectedTone?.colors) {
           set({ generateUiError: "먼저 톤을 선택해주세요." });
           return null;
@@ -108,7 +116,14 @@ export const useToneStore = create(
           const response = await fetch("/api/generate-ui", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tone: selectedTone, survey }),
+            // selectedTemplateId 를 함께 보내면 서버가 해당 베이스 템플릿 코드를
+            // 디스크에서 읽어 프롬프트에 주입한다(Template Injection). 미선택(null)이면
+            // 서버는 템플릿 없이 기존 방식대로 생성한다.
+            body: JSON.stringify({
+              tone: selectedTone,
+              survey,
+              selectedTemplateId,
+            }),
           });
 
           if (!response.ok) {
@@ -139,6 +154,7 @@ export const useToneStore = create(
         appDescription: state.appDescription,
         recommendedTones: state.recommendedTones,
         selectedTone: state.selectedTone,
+        selectedTemplateId: state.selectedTemplateId,
         intensity: state.intensity,
       }),
     },

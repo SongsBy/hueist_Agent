@@ -177,33 +177,33 @@ export default function ResultPage() {
             <div className="flex flex-col gap-3">
               {colors
                 ? PALETTE_ROLES.map(({ key, role }) => {
-                    const hex = colors[key];
-                    if (!hex) return null;
-                    const { ko, en } = describeColor(hex);
-                    return (
-                      <figure
-                        key={key}
-                        className="flex items-center gap-4 rounded-2xl bg-white p-4 shadow-[0_2px_16px_-6px_rgba(15,23,42,0.12)]"
-                      >
-                        <span
-                          aria-hidden="true"
-                          className="h-12 w-12 shrink-0 rounded-xl ring-1 ring-black/5"
-                          style={{ backgroundColor: hex }}
-                        />
-                        <figcaption className="flex min-w-0 flex-1 flex-col">
-                          <span className="truncate text-sm font-bold text-gray-900">
-                            {ko} ({en})
-                          </span>
-                          <span className="truncate text-xs text-gray-400">
-                            {role}
-                          </span>
-                        </figcaption>
-                        <span className="shrink-0 font-mono text-sm tracking-wide text-gray-400">
-                          {hex.toUpperCase()}
+                  const hex = colors[key];
+                  if (!hex) return null;
+                  const { ko, en } = describeColor(hex);
+                  return (
+                    <figure
+                      key={key}
+                      className="flex items-center gap-4 rounded-2xl bg-white p-4 shadow-[0_2px_16px_-6px_rgba(15,23,42,0.12)]"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="h-12 w-12 shrink-0 rounded-xl ring-1 ring-black/5"
+                        style={{ backgroundColor: hex }}
+                      />
+                      <figcaption className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-sm font-bold text-gray-900">
+                          {ko} ({en})
                         </span>
-                      </figure>
-                    );
-                  })
+                        <span className="truncate text-xs text-gray-400">
+                          {role}
+                        </span>
+                      </figcaption>
+                      <span className="shrink-0 font-mono text-sm tracking-wide text-gray-400">
+                        {hex.toUpperCase()}
+                      </span>
+                    </figure>
+                  );
+                })
                 : null}
             </div>
           </section>

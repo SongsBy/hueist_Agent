@@ -5,6 +5,7 @@ import {
   fetchKoreanFonts,
 } from "@/app/lib/googleFonts";
 import { enrichPalette } from "@/app/lib/colorUtils";
+import { callGemini } from "@/app/lib/geminiClient";
 
 const TYPOGRAPHY_MATCHING_GUIDE = `
 ### TYPOGRAPHY MATCHING LOGIC (반드시 적용):
@@ -241,34 +242,39 @@ export async function POST(req) {
     );
     const systemPrompt = buildSystemPrompt(fontCurationText);
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system_instruction: {
-            parts: [{ text: systemPrompt }],
+    const { ok, status, data } = await callGemini({
+      model: "gemini-2.5-flash",
+      payload: {
+        system_instruction: {
+          parts: [{ text: systemPrompt }],
+        },
+        contents: [
+          {
+            parts: [{ text: buildUserPrompt(survey) }],
           },
-          contents: [
-            {
-              parts: [{ text: buildUserPrompt(survey) }],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.85,
-            responseMimeType: "application/json",
+        ],
+        generationConfig: {
+          temperature: 0.85,
+          responseMimeType: "application/json",
+          // gemini-2.5-flash는 기본적으로 내부 추론(thinking)에 많은 시간을 쓴다.
+          // 추론은 출력 JSON의 thinking_process 필드로 대체하므로 내부 thinking은
+          // 최소화해 응답 지연(기존 ~70s)을 크게 줄인다.
+          thinkingConfig: {
+            thinkingBudget: 0,
           },
-        }),
+        },
       },
-    );
+    });
 
-    const data = await response.json();
-
-    if (!response.ok || !Array.isArray(data?.candidates)) {
+    if (!ok || !Array.isArray(data?.candidates)) {
       console.error("Gemini API Error Response:", data);
+      const overloaded = status === 503 || status === 429;
       return Response.json(
-        { error: "AI 생성에 실패했습니다." },
+        {
+          error: overloaded
+            ? "AI 서버가 일시적으로 혼잡해요. 잠시 후 다시 시도해주세요."
+            : "AI 생성에 실패했습니다.",
+        },
         { status: 502 },
       );
     }
