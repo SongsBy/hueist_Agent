@@ -47,7 +47,7 @@ function ReferenceCard({ reference, selectable = false, selected = false, onSele
     : { className: "group flex flex-col" };
 
   return (
-    <Wrapper {...wrapperProps}>
+    <Wrapper {...wrapperProps} className={selectable ? "group flex flex-col text-left focus:outline-none cursor-pointer relative" : "group flex flex-col relative"}>
       <div
         className={[
           "relative overflow-hidden rounded-2xl border bg-white shadow-sm transition-all duration-300 group-hover:-translate-y-1.5 group-hover:shadow-xl",
@@ -57,6 +57,9 @@ function ReferenceCard({ reference, selectable = false, selected = false, onSele
         ].join(" ")}
         style={{ width: THUMB_WIDTH, height: THUMB_HEIGHT }}
       >
+        {selectable && (
+          <div className="absolute inset-0 z-50" aria-hidden="true" />
+        )}
         <div
           className="hueist-app-viewport pointer-events-none origin-top-left"
           style={{
@@ -71,7 +74,7 @@ function ReferenceCard({ reference, selectable = false, selected = false, onSele
 
         {/* 선택 표시 체크 배지 */}
         {selectable && selected ? (
-          <span className="absolute right-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-full bg-gray-900 text-sm font-bold text-white shadow-md">
+          <span className="absolute right-2.5 top-2.5 z-50 flex h-7 w-7 items-center justify-center rounded-full bg-gray-900 text-sm font-bold text-white shadow-md">
             ✓
           </span>
         ) : null}

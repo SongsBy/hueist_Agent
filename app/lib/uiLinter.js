@@ -141,6 +141,95 @@ function isAllowedColor(rgb, allowedTokens) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// rogue 색상 결정론적 보정 (remapRogueColors)
+//
+// 색상 위반은 다른 계약 위반(className/가상선택자/미정의 컴포넌트/render 누락)과
+// 성격이 다르다 — 임의의 HEX 도 react-live 런타임에서는 멀쩡히 렌더된다. 즉 런타임
+// 크래시가 아니라 "디자인 일관성"만의 문제다. LLM 이 알림 점(red dot) 같은 강한
+// 선험 때문에 재시도를 모두 소진하도록 토큰 외 색을 고집하면, 멀쩡히 렌더될 코드를
+// 502 로 버리고 사용자에겐 빈 화면만 남는다. 그보다, 남은 rogue HEX 를 가장 가까운
+// 토큰 색으로 결정론적으로 치환해 화면이라도 띄우는 편이 낫다(graceful degradation).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// tone.colors 의 값들을 {rgb, hex} 로 수집한다(치환 시 대체 hex 가 필요).
+function buildAllowedColorTokens(tone) {
+  const tokens = [];
+  const colors = tone?.colors ?? {};
+
+  for (const value of Object.values(colors)) {
+    if (typeof value !== "string") continue;
+    const m = value.match(/^#?([0-9a-fA-F]{3,8})$/);
+    if (!m) continue;
+    const normalized = normalizeHex(m[1]);
+    if (normalized) tokens.push({ rgb: hexToRgb(normalized), hex: `#${normalized}` });
+  }
+
+  return tokens;
+}
+
+// 후보 RGB 에 가장 가까운(유클리드 거리) 토큰을 고른다.
+function nearestToken(rgb, tokens) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const t of tokens) {
+    const d =
+      (rgb[0] - t.rgb[0]) ** 2 +
+      (rgb[1] - t.rgb[1]) ** 2 +
+      (rgb[2] - t.rgb[2]) ** 2;
+    if (d < bestDist) {
+      bestDist = d;
+      best = t;
+    }
+  }
+  return best;
+}
+
+/**
+ * 토큰과 무관한 rogue HEX 를 가장 가까운 토큰 색으로 결정론적 치환한다.
+ * 무채색/토큰/파생값은 그대로 둔다. 토큰을 만들 수 없으면 원본을 그대로 돌린다.
+ *
+ * @param {string} code - sanitize 된 JSX 문자열
+ * @param {object} tone - tone.colors 에 허용 색 토큰들이 들어있다.
+ * @returns {string} rogue 색이 보정된 코드(보정 대상이 없으면 원본 그대로)
+ */
+export function remapRogueColors(code, tone) {
+  if (typeof code !== "string") return code;
+  const tokens = buildAllowedColorTokens(tone);
+  if (tokens.length === 0) return code;
+
+  const allowedRgb = tokens.map((t) => t.rgb);
+  let result = code;
+  const handled = new Set();
+
+  for (const body of extractHexColors(code)) {
+    const key = body.toUpperCase();
+    if (handled.has(key)) continue;
+    handled.add(key);
+
+    const normalized = normalizeHex(body);
+    if (!normalized) continue;
+    const rgb = hexToRgb(normalized);
+    if (isAllowedColor(rgb, allowedRgb)) continue;
+
+    // 보정 대상은 토큰과 동떨어진 "선명한" 색(알림 점·강조 등)이라 가시성이 의도된
+    // 경우가 많다. 근사 후보를 채도 있는(=무채색 아님) 토큰으로 한정해, 빨강 점이
+    // 보이지 않는 거의-흰색 토큰으로 매핑돼 사라지는 일을 막는다. 채도 토큰이 하나도
+    // 없을 때만 전체 토큰을 후보로 쓴다.
+    const chromaticTokens = tokens.filter((t) => !isNeutral(t.rgb));
+    const near = nearestToken(
+      rgb,
+      chromaticTokens.length > 0 ? chromaticTokens : tokens,
+    );
+    if (!near) continue;
+
+    // '#body' 의 모든 출현을 토큰 hex 로 치환(대소문자 무관, 경계 보존).
+    result = result.replace(new RegExp(`#${body}\\b`, "gi"), near.hex);
+  }
+
+  return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 미정의 아이콘/컴포넌트 검출 (개선점 ④)
 //
 // 전처리기는 lucide import 와 <Heart /> 같은 아이콘 컴포넌트를 일부러 안 건드리고

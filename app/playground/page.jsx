@@ -1,7 +1,7 @@
 // app/playground/page.jsx
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { LiveProvider, LivePreview, LiveError } from "react-live";
 import {
   Sparkles,
@@ -16,9 +16,10 @@ import {
 import { useToneStore } from "../store/useToneStore";
 
 // react-live 가 생성 코드 안에서 쓸 수 있는 유일한 의존성.
-// LiveAppPreview 와 동일하게 순수 React + useState 만 주입한다(외부 라이브러리 0).
+// 프롬프트가 bare global 로 약속하는 훅(useState/useEffect/useRef/useMemo/useCallback)만
+// 주입한다(외부 라이브러리 0). uiPromptBuilder 의 RUNTIME CONTRACT 와 1:1로 맞춘다.
 // noInline 모드라 생성 코드는 컴포넌트를 정의하고 render(<App/>) 로 끝나야 한다.
-const SCOPE = { React, useState };
+const SCOPE = { React, useState, useEffect, useRef, useMemo, useCallback };
 
 // code 의 초기값. "아직 아무것도 생성되지 않은" 상태를 위한 기본 디자인 컴포넌트.
 // 인라인 스타일만 쓰므로 Tailwind 유무와 무관하게 항상 의도한 모습으로 렌더된다.

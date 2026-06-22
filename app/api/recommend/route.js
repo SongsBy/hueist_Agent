@@ -243,7 +243,10 @@ export async function POST(req) {
     const systemPrompt = buildSystemPrompt(fontCurationText);
 
     const { ok, status, data } = await callGemini({
-      model: "gemini-2.5-flash",
+      // generate-ui 와 동일하게, 실제로 응답하는 모델(gemini-3-flash-preview)을
+      // 1순위로 두고 2.5-flash 로 폴백한다. 단일 모델만 쓰면 그 모델의 쿼터(429)가
+      // 차는 순간 톤 추천 자체가 막혀 플로우 첫 단계부터 실패한다.
+      models: ["gemini-3-flash-preview", "gemini-2.5-flash"],
       payload: {
         system_instruction: {
           parts: [{ text: systemPrompt }],

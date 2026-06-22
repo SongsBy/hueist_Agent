@@ -79,9 +79,14 @@ to generate ONE polished, realistic screen of that app, embodying the tone.
 RUNTIME CONTRACT (위반 시 화면이 깨진다 — 절대 준수)
 ══════════════════════════════════════════════════════════════════════════
 - Your output is executed by react-live in noInline mode.
-- The ONLY things in scope are: React, useState. NOTHING else is importable.
-  Do NOT write any import/export statements. Do NOT use any library (no lucide,
-  no charts, no framer-motion, no Tailwind plugin).
+- React and these hooks are ALREADY in scope as bare globals: useState, useEffect,
+  useRef, useMemo, useCallback. Use them directly (e.g. const [x, setX] = useState()).
+  NOTHING else is importable.
+- Do NOT write any import/export statements. Do NOT re-declare what is already in
+  scope: never write "const { useState } = React;" or "const useState = React.useState;"
+  — these collide with the injected scope and crash with
+  "Identifier 'useState' has already been declared". Just use the hooks directly.
+- Do NOT use any library (no lucide, no charts, no framer-motion, no Tailwind plugin).
 - Define a single functional component named App, then on the LAST line call:
       render(<App />)
 - Icons: draw them as inline <svg> with hand-written paths. No icon libraries.
@@ -111,6 +116,15 @@ RUNTIME CONTRACT (위반 시 화면이 깨진다 — 절대 준수)
   Never re-introduce className or Tailwind utilities — they do not compile here.
 - All colors MUST come from the provided HEX tokens (or alpha/derived variants of
   them like 'rgba(...)'/ '...20'). Do not invent unrelated colors.
+- THIS INCLUDES STATUS / SEMANTIC COLORS — the most common mistake. Do NOT reach for
+  a "real" red / green / amber for notification dots, badges, unread markers, error/
+  success/warning states, up/down deltas, or "positive vs negative" amounts. There is
+  NO red, green, or amber available. A red notification dot (e.g. #FF4D4D, #FF6347,
+  #EF4444) or a green income amount (e.g. #10B981, #90EE90) WILL be rejected and the
+  screen fails to render. Instead, express ALL such states with the tone tokens only:
+  use the primary/tertiary token (or a darker/lighter derived shade of it) for the
+  notification dot, badge, and "positive" emphasis; use a neutral gray for the muted/
+  "negative" state. Differentiate by token + weight + size, never by a foreign hue.
 - Output RAW JSX CODE ONLY. No markdown fences, no prose, no comments before/after.
 
 ══════════════════════════════════════════════════════════════════════════
@@ -140,7 +154,6 @@ AESTHETIC DIRECTIVES (the part that separates pros from AI slop)
 5. HONOR THE 60-30-10 COLOR RULE.
    - 60%: background/surface tokens dominate the canvas (low visual fatigue).
    - 30%: primary/secondary for section surfaces and rhythm.
-   - 10%: tertiary/accent ONLY on the single most important action or highlight.
    Do not flood the screen with the accent color.
 
 6. CONTENT IN KOREAN. All user-facing copy in the screen must be natural Korean
@@ -201,6 +214,53 @@ ${serializeTone(tone)}
 - 마지막 줄은 반드시 render(<App />) 로 끝나야 한다.
 
 이제 RAW JSX 코드만 출력하라.`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EDIT (대화형 수정) USER PROMPT
+// mobile-playground 채팅에서 "지금 보이는 화면을 이렇게 바꿔줘" 식의 요청을 처리한다.
+// 새 화면을 처음부터 만드는 게 아니라, 현재 코드(currentCode)를 출발점으로 삼아
+// 요청한 변경만 반영한 "전체 화면"을 다시 출력하게 한다.
+// ─────────────────────────────────────────────────────────────────────────────
+export function buildUiEditUserPrompt(tone, message, currentCode, history) {
+  // 이전 사용자 요청을 순서대로 모아 맥락 연속성을 준다(assistant 메시지는 제외).
+  const priorRequests = Array.isArray(history)
+    ? history
+        .filter((m) => m?.role === "user" && typeof m.content === "string")
+        .map((m) => m.content.trim())
+        .filter(Boolean)
+    : [];
+  const historyBlock = priorRequests.length
+    ? priorRequests.map((t, i) => `  ${i + 1}. ${t}`).join("\n")
+    : "  (이전 요청 없음 — 이번이 첫 수정)";
+
+  return `사용자가 지금 폰에 떠 있는 화면을 보고 수정을 요청했다. 너의 임무는 새 화면을
+처음부터 만드는 게 아니라, 아래 [CURRENT SCREEN] 코드를 출발점으로 삼아 [이번 요청]을
+반영한 "수정된 전체 화면"을 다시 출력하는 것이다.
+
+[지금까지의 사용자 요청 흐름]
+${historyBlock}
+
+[이번 요청 — 반드시 반영]
+"${typeof message === "string" ? message.trim() : ""}"
+
+[CURRENT SCREEN — 이 코드를 수정하라. 이미 인라인 style 만 사용한다]
+\`\`\`jsx
+${currentCode}
+\`\`\`
+
+[DESIGN TONE — 색·폰트·무드의 기준]
+${serializeTone(tone)}
+
+작업 규칙:
+- 요청과 무관한 부분은 그대로 유지하라. 화면을 통째로 갈아엎지 말고 요청한 변경만 반영한다.
+- 사용자가 색 변경을 명시하지 않는 한, 색상은 위 [DESIGN TONE] HEX 토큰(과 그 알파/명암
+  파생값)을 유지하라.
+- 위 SYSTEM 의 런타임 계약을 모두 지켜라(인라인 style 만, className/Tailwind 금지,
+  가상선택자 금지, 아이콘은 손으로 그린 인라인 <svg>).
+- 결과는 항상 완전한 단일 화면이어야 하며, 마지막 줄은 반드시 render(<App />) 로 끝나야 한다.
+
+이제 수정된 RAW JSX 코드 전체만 출력하라.`;
 }
 
 // 템플릿 모드: 주어진 청사진의 레이아웃·DOM 구조를 그대로 유지한 채 톤에 맞춰

@@ -3,9 +3,10 @@ import path from "path";
 import {
   buildUiSystemPrompt,
   buildUiUserPrompt,
+  buildUiEditUserPrompt,
 } from "@/app/lib/uiPromptBuilder";
 import { callGemini } from "@/app/lib/geminiClient";
-import { validateGeneratedUi } from "@/app/lib/uiLinter";
+import { validateGeneratedUi, remapRogueColors } from "@/app/lib/uiLinter";
 import { preprocessTemplate } from "@/app/lib/tailwindToInline";
 
 // 린터(결정론적 검증)가 코드를 반려했을 때 재생성하는 최대 횟수.
@@ -14,7 +15,9 @@ import { preprocessTemplate } from "@/app/lib/tailwindToInline";
 const MAX_LINT_ATTEMPTS = 3;
 
 // generate-ui 가 사용하는 모델 체인. 첫 모델이 과부하(503/429)면 다음으로 폴백한다.
-const MODEL_CHAIN = ["gemini-3.5-flash", "gemini-2.5-flash"];
+// gemini-2.5-flash 가 가장 빠르고(~20s) 안정적이라 1순위로 둔다. 과부하/쿼터 시
+// gemini-3-flash-preview 로 폴백한다(gemini-3.5-flash 는 503 잦아 체인에서 제외).
+const MODEL_CHAIN = ["gemini-2.5-flash", "gemini-3-flash-preview"];
 
 // 템플릿 id → 실제 파일명 매핑. registry.js 의 TEMPLATES[].id 와 1:1로 맞춘다.
 // 여기 없는 id(또는 null)는 "템플릿 미선택"으로 간주해 베이스 코드 없이 생성한다.
@@ -60,11 +63,23 @@ async function loadBaseTemplateCode(selectedTemplateId) {
 // import/export 구문 제거. react-live 의 sucrase 가 import 를 require() 로
 // 바꾸면 브라우저에 require 가 없어 "require is not defined" 로 깨지므로,
 // 모듈 구문은 실행 전에 반드시 제거해야 한다.
+//
+// 추가로, react-live scope 로 이미 주입되는 React/훅을 코드가 다시 선언하면
+// (예: `const { useState } = React;`, `const useState = React.useState;`)
+// 래퍼 안에서 "Identifier 'useState' has already been declared" 로 깨진다.
+// 이런 재선언 구문도 제거해 충돌을 막는다(훅은 scope 에서 그대로 사용 가능).
 function stripModuleSyntax(code) {
   return code
     .replace(/import\s+(?:[\w*{}\n\r\t, ]+\s+from\s+)?['"][^'"]+['"];?/g, "")
     .replace(/export\s+default\s+/g, "")
-    .replace(/^\s*export\s+/gm, "");
+    .replace(/^\s*export\s+/gm, "")
+    // const/let/var { useState, useEffect, ... } = React;
+    .replace(/(?:const|let|var)\s*\{[^}]*\}\s*=\s*React\s*;?/g, "")
+    // const useState = React.useState;  /  const React = window.React; 등 별칭 재선언
+    .replace(
+      /(?:const|let|var)\s+(?:React|useState|useEffect|useRef|useMemo|useCallback|useReducer|useContext|useLayoutEffect)\s*=\s*[^;\n]+;?/g,
+      "",
+    );
 }
 
 // LLM 이 가끔 ```jsx ... ``` 펜스나 앞뒤 설명을 붙이므로 제거하고
@@ -117,6 +132,11 @@ export async function POST(req) {
     const tone = body?.tone;
     const survey = body?.survey ?? null;
     const selectedTemplateId = body?.selectedTemplateId ?? null;
+    // 대화형 수정(채팅) 입력. message + currentCode 가 함께 오면 "현재 화면 수정" 모드.
+    const message = typeof body?.message === "string" ? body.message.trim() : "";
+    const history = Array.isArray(body?.history) ? body.history : [];
+    const currentCode =
+      typeof body?.currentCode === "string" ? body.currentCode : "";
 
     if (!tone || typeof tone !== "object" || !tone.colors) {
       return Response.json(
@@ -125,25 +145,41 @@ export async function POST(req) {
       );
     }
 
-    // 선택된 베이스 템플릿의 원문 코드를 읽는다(없으면 null).
-    const rawTemplateCode = await loadBaseTemplateCode(selectedTemplateId);
+    // 모드 분기:
+    //  - 수정 모드(message + currentCode): 현재 화면을 출발점으로 요청만 반영해 재생성.
+    //  - 초기 생성 모드: 톤(+선택 템플릿)으로 첫 화면을 처음부터 생성(기존 동작).
+    const isEditMode = Boolean(message && currentCode);
 
-    // Step 1 — 결정론적 전처리. Tailwind className 을 빌드 전에 인라인 style 로 변환해,
-    // LLM 이 "Tailwind 번역"이라는 비결정적 작업에 토큰/지연을 쓰지 않게 한다. LLM 은
-    // 이제 인라인-스타일 청사진만 받아 톤에 맞춰 색·스타일만 재조정하면 된다.
-    const baseTemplateCode = rawTemplateCode
-      ? preprocessTemplate(rawTemplateCode)
-      : null;
+    // baseTemplateCode 는 초기 생성 모드에서만 의미가 있다(수정 모드는 currentCode 가 출발점).
+    let baseTemplateCode = null;
+    let userPrompt;
+    if (isEditMode) {
+      userPrompt = buildUiEditUserPrompt(tone, message, currentCode, history);
+    } else {
+      // 선택된 베이스 템플릿의 원문 코드를 읽는다(없으면 null).
+      const rawTemplateCode = await loadBaseTemplateCode(selectedTemplateId);
 
-    // 시스템/유저 프롬프트는 입력에만 의존하므로 루프 밖에서 한 번만 만든다.
+      // Step 1 — 결정론적 전처리. Tailwind className 을 빌드 전에 인라인 style 로 변환해,
+      // LLM 이 "Tailwind 번역"이라는 비결정적 작업에 토큰/지연을 쓰지 않게 한다. LLM 은
+      // 이제 인라인-스타일 청사진만 받아 톤에 맞춰 색·스타일만 재조정하면 된다.
+      baseTemplateCode = rawTemplateCode
+        ? preprocessTemplate(rawTemplateCode)
+        : null;
+      userPrompt = buildUiUserPrompt(tone, survey, baseTemplateCode);
+    }
+
+    // 시스템 프롬프트는 입력에만 의존하므로 루프 밖에서 한 번만 만든다.
     const systemPrompt = buildUiSystemPrompt();
-    const userPrompt = buildUiUserPrompt(tone, survey, baseTemplateCode);
 
     // 린터 게이트키퍼 루프: 생성 → sanitize → 검증.
     // 계약 위반(className/가상선택자/rogue HEX/미정의 아이콘/render 누락)이면 출력을
     // 버리고, 위반 사유를 다음 요청에 피드백해 재생성한다(개선점 ①).
     // callGemini 의 내부 재시도(일시 오류)와는 별개다.
     let lastLintError = null;
+    // 마지막으로 sanitize 된 코드/모델 — 모든 시도가 색상 위반으로 막혔을 때
+    // 결정론적 색 보정을 적용해 화면이라도 띄우기 위한 폴백 출발점.
+    let lastCode = null;
+    let lastServedModel = MODEL_CHAIN[0];
 
     for (let attempt = 1; attempt <= MAX_LINT_ATTEMPTS; attempt += 1) {
       // 직전 시도가 린터에 막혔다면 교정 지시를 추가 part 로 덧붙인다.
@@ -159,10 +195,15 @@ export async function POST(req) {
           },
         ],
         generationConfig: {
+          // 수정 모드는 현재 화면을 최대한 보존하며 요청만 반영해야 하므로 가장 낮게(0.4).
           // 자유 모드(템플릿 없음)는 창의적 레이아웃을 위해 높게(0.9).
           // 템플릿 모드는 주어진 청사진을 충실히 재색칠해야 하므로 이탈을 줄이려
           // 낮춘다(0.55). 같은 0.9 에서는 강한 창의 지시가 "레이아웃 유지"를 이긴다.
-          temperature: baseTemplateCode ? 0.55 : 0.9,
+          temperature: isEditMode ? 0.4 : baseTemplateCode ? 0.55 : 0.9,
+          // gemini-3.5-flash/2.5-flash 는 기본적으로 내부 추론(thinking)에 시간을 많이
+          // 써 응답이 ~40s+ 로 늘어졌고, 린터 재시도까지 겹치면 클라이언트 타임아웃까지
+          // 갔다. 추론을 끄면(=0) 생성 시간이 크게 줄어든다(recommend 와 동일 전략).
+          thinkingConfig: { thinkingBudget: 0 },
         },
       };
 
@@ -195,6 +236,8 @@ export async function POST(req) {
       // 실제로 응답한 모델(폴백 여부 가시화, 개선점 ③). Gemini 응답의 modelVersion 을
       // 우선 쓰고, 없으면 체인의 첫 모델로 폴백 표기한다.
       const servedModel = data?.modelVersion ?? MODEL_CHAIN[0];
+      lastCode = code;
+      lastServedModel = servedModel;
 
       try {
         // 결정론적 검증. 위반 시 구체적 메시지의 Error 를 던진다.
@@ -212,7 +255,32 @@ export async function POST(req) {
       }
     }
 
-    // 모든 시도가 린터를 통과하지 못함 — 마지막 위반 사유를 사용자에게 전달한다.
+    // 모든 시도가 린터를 통과하지 못함. 다만 색상 위반은 런타임 크래시가 아니라
+    // 디자인 일관성 문제일 뿐이라(임의 HEX 도 react-live 에서 멀쩡히 렌더됨), 마지막
+    // 출력의 rogue HEX 를 가장 가까운 토큰으로 결정론적 보정한 뒤 재검증한다. 보정 후
+    // 모든 계약을 통과하면(=남은 위반이 색상뿐이었다면) 빈 화면 대신 보정본을 렌더한다.
+    if (lastCode) {
+      const remapped = remapRogueColors(lastCode, tone);
+      if (remapped !== lastCode) {
+        try {
+          validateGeneratedUi(remapped, tone);
+          console.warn(
+            "generate-ui: 색상 위반을 근사 토큰으로 자동 보정해 렌더합니다(graceful degradation).",
+          );
+          return Response.json({
+            code: remapped,
+            model: lastServedModel,
+            lintAttempts: MAX_LINT_ATTEMPTS,
+            colorAutofixed: true,
+          });
+        } catch {
+          // 색 보정 후에도 다른 계약 위반(미정의 컴포넌트/render 누락 등)이 남음 —
+          // 자동 보정으로 구제 불가하므로 아래 정상 실패 경로로 떨어진다.
+        }
+      }
+    }
+
+    // 색상 외 위반까지 남았다 — 마지막 위반 사유를 사용자에게 전달한다.
     return Response.json(
       {
         error: `생성된 UI 코드가 런타임 계약을 반복해서 위반했어요. (${lastLintError?.message ?? "알 수 없는 검증 오류"})`,

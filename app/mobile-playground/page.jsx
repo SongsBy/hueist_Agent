@@ -1,7 +1,7 @@
 // app/mobile-playground/page.jsx
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { LiveProvider, LivePreview, LiveError } from "react-live";
 import {
   Sparkles,
@@ -11,6 +11,7 @@ import {
   Loader2,
   Smartphone,
   RotateCcw,
+  AlertTriangle,
   Wifi,
   Signal,
   BatteryFull,
@@ -18,9 +19,10 @@ import {
 import { useToneStore } from "../store/useToneStore";
 
 // react-live 가 생성 코드 안에서 쓸 수 있는 유일한 의존성.
-// LiveAppPreview 와 동일하게 순수 React + useState 만 주입한다(외부 라이브러리 0).
+// 프롬프트가 bare global 로 약속하는 훅(useState/useEffect/useRef/useMemo/useCallback)만
+// 주입한다(외부 라이브러리 0). uiPromptBuilder 의 RUNTIME CONTRACT 와 1:1로 맞춘다.
 // noInline 모드라 생성 코드는 컴포넌트를 정의하고 render(<App/>) 로 끝나야 한다.
-const SCOPE = { React, useState };
+const SCOPE = { React, useState, useEffect, useRef, useMemo, useCallback };
 
 // code 의 초기값. 모바일 프레임 안에 들어갈 기본 화면.
 // 인라인 스타일만 쓰므로 Tailwind 유무와 무관하게 항상 의도한 모습으로 렌더된다.
@@ -76,20 +78,56 @@ const WELCOME_MESSAGE = {
     "안녕하세요! 어떤 모바일 화면을 만들어 드릴까요? 예) “민트색 톤의 운동 기록 홈 화면 만들어줘”",
 };
 
+// 생성 호출 상한 시간. Gemini 가 응답하지 않거나 과도하게 느릴 때 로딩 오버레이가
+// 영영 걸려 "흰 화면"처럼 보이는 것을 막는다(타임아웃되면 재시도 안내로 전환).
+const GEN_TIMEOUT_MS = 60000;
+
+// /api/generate-ui 호출을 타임아웃과 함께 감싼다. 성공 시 생성 코드(string|null)를
+// 반환하고, 실패/타임아웃이면 사용자에게 보여줄 메시지를 가진 Error 를 던진다.
+async function postGenerateUi(body) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GEN_TIMEOUT_MS);
+  try {
+    const response = await fetch("/api/generate-ui", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data?.error ?? "UI 생성에 실패했어요. 다시 시도해주세요.");
+    }
+    const data = await response.json();
+    return data?.code ?? null;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("생성이 너무 오래 걸려 중단했어요. 다시 시도해 주세요.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export default function MobilePlaygroundPage() {
   // === 핵심 상태 ===
   const [code, setCode] = useState(PLACEHOLDER_CODE);
   const [messages, setMessages] = useState([WELCOME_MESSAGE]);
   const [isLoading, setIsLoading] = useState(false);
   const [input, setInput] = useState("");
+  // 첫 화면 자동 생성이 실패하면 폰 안에 재시도 카드를 띄운다(placeholder 에 방치 X).
+  const [initFailed, setInitFailed] = useState(false);
 
   // react-live 는 브라우저 DOM 에 의존하므로 마운트 이후에만 미리보기를 렌더해
   // SSR/하이드레이션 깜빡임을 피한다.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  // 현재 선택된 톤(색·폰트·무드)을 백엔드 맥락으로 함께 보낸다.
+  // 현재 선택된 톤(색·폰트·무드)과 설문·템플릿을 백엔드 맥락으로 함께 보낸다.
   const selectedTone = useToneStore((state) => state.selectedTone);
+  const survey = useToneStore((state) => state.survey);
+  const selectedTemplateId = useToneStore((state) => state.selectedTemplateId);
 
   // 새 메시지가 쌓이면 채팅 영역을 자동으로 맨 아래로 스크롤.
   const scrollRef = useRef(null);
@@ -97,6 +135,54 @@ export default function MobilePlaygroundPage() {
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [messages, isLoading]);
+
+  // recommend 에서 톤을 고르고 넘어오면, 진입 즉시 그 톤으로 첫 화면을 자동 생성한다.
+  // (톤 없이 직접 들어온 경우엔 자동 생성하지 않고 채팅 안내만 보여준다.)
+  // persist 복원이 늦어 selectedTone 이 뒤늦게 채워질 수 있으므로 의존성에 두되,
+  // ref 가드로 단 한 번만 실행한다.
+  const didKickoff = useRef(false);
+  useEffect(() => {
+    if (didKickoff.current) return;
+    if (!selectedTone?.colors) return;
+    didKickoff.current = true;
+    generateInitialScreen();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTone]);
+
+  // 톤(+선택 템플릿)으로 첫 화면을 생성한다. message 없이 보내면 서버가 초기 생성 모드로 동작.
+  const generateInitialScreen = async () => {
+    if (isLoading) return;
+    setIsLoading(true);
+    setInitFailed(false);
+    try {
+      const nextCode = await postGenerateUi({
+        tone: selectedTone,
+        survey: survey ?? null,
+        selectedTemplateId: selectedTemplateId ?? null,
+      });
+      if (nextCode) setCode(nextCode);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            "고르신 색상으로 첫 화면을 그렸어요! 바꾸고 싶은 부분을 말씀해 주세요. 예) “하단에 결제 버튼 추가해줘”",
+        },
+      ]);
+    } catch (error) {
+      setInitFailed(true);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: error?.message ?? "문제가 발생했어요. 잠시 후 다시 시도해 주세요.",
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e?.preventDefault?.();
@@ -110,23 +196,12 @@ export default function MobilePlaygroundPage() {
     setIsLoading(true);
 
     try {
-      const response = await fetch("/api/generate-ui", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text,
-          history,
-          tone: selectedTone ?? null,
-          currentCode: code,
-        }),
+      const nextCode = await postGenerateUi({
+        message: text,
+        history,
+        tone: selectedTone ?? null,
+        currentCode: code,
       });
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data?.error ?? "UI 생성에 실패했어요. 다시 시도해주세요.");
-      }
-
-      const { code: nextCode } = await response.json();
       if (nextCode) setCode(nextCode);
 
       setMessages((prev) => [
@@ -153,6 +228,7 @@ export default function MobilePlaygroundPage() {
     setCode(PLACEHOLDER_CODE);
     setMessages([WELCOME_MESSAGE]);
     setInput("");
+    setInitFailed(false);
   };
 
   return (
@@ -216,6 +292,31 @@ export default function MobilePlaygroundPage() {
                 <span className="h-4 w-full animate-pulse rounded-full bg-slate-200 [animation-delay:240ms]" />
                 <span className="h-4 w-4/5 animate-pulse rounded-full bg-slate-200 [animation-delay:360ms]" />
               </div>
+            </div>
+          ) : null}
+
+          {/* ===== 첫 화면 생성 실패 (폰 화면 안쪽 재시도 카드) ===== */}
+          {initFailed && !isLoading ? (
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-white/85 px-8 text-center backdrop-blur-sm">
+              <span className="grid h-14 w-14 place-items-center rounded-2xl bg-rose-50 text-rose-500">
+                <AlertTriangle className="h-7 w-7" />
+              </span>
+              <div>
+                <p className="text-sm font-bold text-slate-800">
+                  화면 생성에 실패했어요
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  AI 서버가 잠시 혼잡하거나 응답이 느렸어요. 다시 시도해 주세요.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={generateInitialScreen}
+                className="inline-flex items-center gap-2 rounded-full bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-500/30 transition-transform hover:scale-[1.02] active:scale-95"
+              >
+                <RotateCcw className="h-4 w-4" />
+                다시 시도
+              </button>
             </div>
           ) : null}
         </PhoneMockup>

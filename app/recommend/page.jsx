@@ -3,18 +3,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import dynamic from "next/dynamic";
 import toast from "react-hot-toast";
 import { Sparkles } from "lucide-react";
 import { useToneStore } from "../store/useToneStore";
 import ToneCard from "../components/ToneCard";
 import LoadingOverlay from "../components/LoadingOverlay";
-
-// 스케치북 모달은 react-live(브라우저 전용)에 의존하므로 SSR 을 끄고
-// 클라이언트에서만, 그리고 실제로 열릴 때만 로드한다.
-const SketchbookModal = dynamic(() => import("../components/SketchbookModal"), {
-  ssr: false,
-});
 import {
   buildGoogleFontUrlForTones,
   collectFontFamiliesForTones,
@@ -30,14 +23,10 @@ export default function RecommendPage() {
   const isEnriching = useToneStore((state) => state.isEnriching);
   const enrichSelectedTone = useToneStore((state) => state.enrichSelectedTone);
   const setSelectedTone = useToneStore((state) => state.setSelectedTone);
-  const generateUi = useToneStore((state) => state.generateUi);
 
   // 클릭으로 "선택"된 카드 인덱스. 선택만으로는 페이지가 넘어가지 않고,
   // 상세보기 버튼을 눌렀을 때만 보강 + 라우팅이 일어난다.
   const [selectedIndex, setSelectedIndex] = useState(null);
-
-  // 스케치북 모달에 띄울 톤. null 이면 모달은 닫힌 상태.
-  const [sketchTone, setSketchTone] = useState(null);
 
   // Zustand persist는 클라이언트에서 localStorage를 비동기로 복원한다.
   // 복원 전에 redirect 판단을 내리면 정상 진입한 사용자도 홈으로 튕긴다.
@@ -154,12 +143,11 @@ export default function RecommendPage() {
           onClick={() => {
             if (selectedIndex === null) return;
             const tone = recommendedTones[selectedIndex];
-            // store 의 selectedTone 을 먼저 세팅해야 generateUi() 가 이 톤을 읽는다.
-            // (zustand set 은 동기라 같은 tick 에서 바로 반영된다)
+            // store 의 selectedTone 을 세팅한 뒤 플레이그라운드로 이동한다.
+            // (zustand set 은 동기라 같은 tick 에서 바로 반영되고, 이동한 화면이
+            //  이 톤으로 첫 화면을 자동 생성한 뒤 채팅으로 수정까지 받는다.)
             setSelectedTone(tone);
-            setSketchTone(tone);
-            // 모달이 열리면서 실제 생성이 곧바로 시작되도록 파이프라인을 가동한다.
-            generateUi().catch(() => {});
+            router.push("/mobile-playground");
           }}
           className="pointer-events-auto group inline-flex items-center gap-2.5 rounded-full bg-gray-900 py-4 pr-7 pl-6 text-base font-bold tracking-tight text-white shadow-[0_18px_45px_-12px_rgba(15,23,42,0.6)] ring-1 ring-white/10 transition-transform duration-200 hover:-translate-y-0.5 hover:scale-[1.02] focus:ring-4 focus:ring-gray-900/30 focus:outline-none active:scale-[0.98]"
         >
@@ -176,10 +164,6 @@ export default function RecommendPage() {
       </div>
 
       <LoadingOverlay />
-
-      {sketchTone ? (
-        <SketchbookModal tone={sketchTone} onClose={() => setSketchTone(null)} />
-      ) : null}
     </>
   );
 }

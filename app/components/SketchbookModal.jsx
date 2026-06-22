@@ -1,14 +1,14 @@
 // app/components/SketchbookModal.jsx
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { LiveProvider, LivePreview, LiveError } from "react-live";
-import { X, RefreshCw, AlertTriangle } from "lucide-react";
+import { Sparkles, Send, Paperclip, X, RefreshCw, Bot, AlertTriangle } from "lucide-react";
 import { useToneStore } from "../store/useToneStore";
 
 // react-live 가 생성 코드 안에서 쓸 수 있는 유일한 의존성. (결과 페이지와 동일 정책)
 // noInline 모드라 생성 코드는 컴포넌트를 정의하고 render(<App/>) 로 끝나야 한다.
-const SCOPE = { React, useState };
+const SCOPE = { React, useState, useEffect, useRef, useMemo, useCallback };
 
 // LLM 이 (금지했음에도) import/export 를 끼워 넣으면 react-live 의 sucrase 가
 // 이를 require() 로 변환 → 브라우저에 require 가 없어 "require is not defined" 로
@@ -27,7 +27,14 @@ function stripModuleSyntax(code) {
     // export default ... → 그냥 선언으로
     .replace(/export\s+default\s+/g, "")
     // 그 외 export 키워드 제거
-    .replace(/^\s*export\s+/gm, "");
+    .replace(/^\s*export\s+/gm, "")
+    // scope 로 이미 주입되는 React/훅의 재선언 제거(중복 선언 시 react-live 가
+    // "Identifier 'useState' has already been declared" 로 깨진다).
+    .replace(/(?:const|let|var)\s*\{[^}]*\}\s*=\s*React\s*;?/g, "")
+    .replace(
+      /(?:const|let|var)\s+(?:React|useState|useEffect|useRef|useMemo|useCallback|useReducer|useContext|useLayoutEffect)\s*=\s*[^;\n]+;?/g,
+      "",
+    );
 }
 
 // 시선을 잡는 반짝이는 스켈레톤. AI가 화면을 그리는 동안 폰 내부에 표시된다.
@@ -94,7 +101,7 @@ export default function SketchbookModal({ tone, onClose }) {
   const runGenerate = () => {
     if (isGeneratingUi) return;
     // 생성 호출은 fire-and-forget. 에러는 store(generateUiError) 로 노출한다.
-    generateUi().catch(() => {});
+    generateUi().catch(() => { });
   };
 
   useEffect(() => {
@@ -103,7 +110,7 @@ export default function SketchbookModal({ tone, onClose }) {
     // 최신 store 상태를 직접 읽어 중복 호출을 막는다. (recommend 진입 시 클릭
     // 핸들러가 이미 generateUi() 를 띄웠다면 isGeneratingUi 가 true 라 건너뛴다.)
     const s = useToneStore.getState();
-    if (!s.generatedUiCode && !s.isGeneratingUi) s.generateUi().catch(() => {});
+    if (!s.generatedUiCode && !s.isGeneratingUi) s.generateUi().catch(() => { });
   }, []);
 
   // ESC 로 닫기 + 모달 열림 동안 배경 스크롤 잠금 (모달 필수 UX)
@@ -198,54 +205,54 @@ export default function SketchbookModal({ tone, onClose }) {
                 짧아도 화면 전체가 앱처럼 보이게 한다. */}
             <div className="h-full w-full overflow-y-auto overscroll-contain">
               {isGeneratingUi ? (
-                  <PreviewSkeleton />
-                ) : generateUiError ? (
-                  <div className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
-                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 text-rose-500">
-                      <AlertTriangle size={26} />
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-800">
-                        화면 생성에 실패했어요
-                      </p>
-                      <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                        {generateUiError}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={runGenerate}
-                      className="rounded-full px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-transform hover:scale-[1.02] active:scale-95"
-                      style={{ backgroundColor: primary }}
-                    >
-                      다시 시도
-                    </button>
+                <PreviewSkeleton />
+              ) : generateUiError ? (
+                <div className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 text-rose-500">
+                    <AlertTriangle size={26} />
                   </div>
-                ) : generatedUiCode ? (
-                  <LiveProvider
-                    code={generatedUiCode}
-                    scope={SCOPE}
-                    transformCode={stripModuleSyntax}
-                    noInline
-                  >
-                    <LivePreview style={{ display: "block", minHeight: "100%", width: "100%" }} />
-                    <LiveError className="m-3 rounded-xl bg-red-50 p-3 font-mono text-[11px] whitespace-pre-wrap text-red-700" />
-                  </LiveProvider>
-                ) : (
-                  <div className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
-                    <p className="text-sm font-medium text-slate-500">
-                      이 톤으로 화면을 생성할 준비가 됐어요.
+                  <div>
+                    <p className="text-sm font-bold text-slate-800">
+                      화면 생성에 실패했어요
                     </p>
-                    <button
-                      type="button"
-                      onClick={runGenerate}
-                      className="rounded-full px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-transform hover:scale-[1.02] active:scale-95"
-                      style={{ backgroundColor: primary }}
-                    >
-                      화면 생성하기
-                    </button>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                      {generateUiError}
+                    </p>
                   </div>
-                )}
+                  <button
+                    type="button"
+                    onClick={runGenerate}
+                    className="rounded-full px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-transform hover:scale-[1.02] active:scale-95"
+                    style={{ backgroundColor: primary }}
+                  >
+                    다시 시도
+                  </button>
+                </div>
+              ) : generatedUiCode ? (
+                <LiveProvider
+                  code={generatedUiCode}
+                  scope={SCOPE}
+                  transformCode={stripModuleSyntax}
+                  noInline
+                >
+                  <LivePreview style={{ display: "block", minHeight: "100%", width: "100%" }} />
+                  <LiveError className="m-3 rounded-xl bg-red-50 p-3 font-mono text-[11px] whitespace-pre-wrap text-red-700" />
+                </LiveProvider>
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
+                  <p className="text-sm font-medium text-slate-500">
+                    이 톤으로 화면을 생성할 준비가 됐어요.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={runGenerate}
+                    className="rounded-full px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-transform hover:scale-[1.02] active:scale-95"
+                    style={{ backgroundColor: primary }}
+                  >
+                    화면 생성하기
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
